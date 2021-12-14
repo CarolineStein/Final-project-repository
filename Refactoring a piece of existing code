@@ -1,0 +1,161 @@
+#refactoring
+#Waning VE
+
+library(tidyverse)
+library(reshape2)
+library(data.table)
+
+tsvacc <- read.csv("/ihme/homes/cstein87/vaceff/tsvacc.csv")
+
+#keep only "0=inlcude" of "exclude this source from analysis" variable
+ve1 <- subset(tsvacc, exclude == 0)
+
+ve2 <- subset(ve1, select = c(study_id, author, X1st.dose.only., location_id, location_id2, location_name, location_name2, 
+                              vaccine_developer, variant, symptom_severity, severity,
+                              sample_size, efficacy_mean, efficacy_lower, efficacy_upper, start_interval, end_interval))
+
+#weeks after second dose
+ve2 <- mutate(ve2, mid_point = ((end_interval - start_interval)/2) + start_interval)
+
+#calculate the OR from efficacy_mean
+ve2 <- mutate(ve2, or = (1 - efficacy_mean))
+
+#to convert the effectiveness CI in OR standard error 
+ve2 <- mutate(ve2, or_lower = (1 - efficacy_upper))
+ve2 <- mutate(ve2, or_upper = (1 - efficacy_lower))
+ve2 <- mutate(ve2, se = (or_upper - or_lower)/3.92)
+
+#transforming in log space
+ve2 <- mutate(ve2, or_log = log(or))
+ve2 <- mutate(ve2, se_log = (log(or_upper) - log(or_lower))/3.92)
+
+#meta-regression spline models with separate models by vaccine and outcome
+
+library(dplyr)
+library(mrbrt001, lib.loc = "/ihme/code/mscm/R/packages/")
+
+
+#Pfizer - infection, symptomatic, hosp, death, severe
+pfiz <- subset(ve2, vaccine_developer == "Pfizer & BioNTech" & severity == "infection") #sev_severity #severity
+
+#3.5.1 - Setting priors and shape constraints on splines
+ve6 <- MRData()
+ve6$load_df(
+  data = pfiz,  
+  col_obs = "or_log", 
+  col_obs_se = "se_log",
+  col_covs = list("mid_point"),
+  col_study_id = "location_name2" )
+
+mod1 <- MRBRT(
+  data = ve6,
+  cov_models = list(
+    LinearCovModel("intercept", use_re = TRUE),
+    LinearCovModel(
+      alt_cov = "mid_point",
+      use_spline = TRUE,
+      #spline_knots = array(c(0, 0.25, 0.5, 0.75, 1)),
+      #spline_knots = array(c(0, 0.45, 0.90, 1)),             # 1.0 12 24  
+      #spline_knots = array(c(0, 0.67, 1)),                    # 1.0 18
+      spline_knots = array(seq(0, 1, length.out = 4)),       # 1.0  9.5 18.0 26.5    #(seq(0, 1, by = 0.2)
+      spline_degree = 2L,
+      spline_knots_type = 'domain',
+      spline_r_linear = TRUE,
+      spline_l_linear = FALSE,
+      prior_spline_monotonicity = 'increasing'
+      # prior_spline_convexity = "convex"
+      # prior_spline_maxder_gaussian = array(c(0, 0.01))
+      # prior_spline_maxder_gaussian = rbind(c(0,0,0,0,-1), c(Inf,Inf,Inf,Inf,0.0001))
+    )
+  )
+)
+
+mod1$fit_model(inner_print_level = 5L, inner_max_iter = 1000L)
+
+df_pred3 <- data.frame(mid_point = seq(0, 52, by = 0.1))
+dat_pred3 <- MRData()
+dat_pred3$load_df(
+  data = df_pred3, 
+  col_covs=list('mid_point')
+)
+
+df_pred3$pred5 <- mod1$predict(data = dat_pred3)
+
+#calculate the VE from OR log scale
+df_pred3 <- mutate(df_pred3, ve = (1 - exp(pred5)))
+
+#plot
+pfiz <- mutate(pfiz, insesqua = (1/sqrt(se))/10)
+
+with(pfiz, plot(mid_point, efficacy_mean, xlim = c(0, 52), ylim = c(0, 1), col = location_name2, cex = insesqua)) 
+with(df_pred3, lines(mid_point, ve))
+#grid()
+
+#visualize knot locations
+for (k in mod1$cov_models[[2]]$spline_knots) abline(v = k, col = "gray")
+
+groups1 <- unique(pfiz$location_name2)
+
+for (grp in groups1) {
+  df_tmp <- filter(pfiz, location_name2 == grp)
+  with(arrange(df_tmp, mid_point), lines(mid_point, efficacy_mean, lty = 2, col = "gray"))
+}
+
+# where the knot locations are on the spline  
+get_knots <- function(model, cov_model_name) {
+  model$cov_models[[which(model$cov_model_names == cov_model_name)]]$spline$knots
+}
+
+get_knots(model = mod1, cov_model_name = "mid_point")
+
+
+#rename datasets by outcome
+pfizer_inf <- df_pred3
+pfizer_inf <- rename(pfizer_inf, logpfi_inf = pred5)
+pfizer_inf <- rename(pfizer_inf, pfi_inf = ve)
+
+pfizer_sym <- df_pred3
+pfizer_sym <- rename(pfizer_sym, logpfi_sym = pred5)
+pfizer_sym <- rename(pfizer_sym, pfi_sym = ve)
+
+pfizer_hosp <- df_pred3
+pfizer_hosp <- rename(pfizer_hosp, logpfi_hosp = pred5)
+pfizer_hosp <- rename(pfizer_hosp, pfi_hosp = ve)
+
+pfizer_dea <- df_pred3
+pfizer_dea <- rename(pfizer_dea, logpfi_death = pred5)
+pfizer_dea <- rename(pfizer_dea, pfi_death = ve)
+
+combine <- merge(pfizer_inf, pfizer_sym, by = "mid_point")
+combine <- merge(combine, pfizer_hosp, by = "mid_point")
+combine <- merge(combine, pfizer_dea, by = "mid_point")
+
+#plot using ggplot
+combine <- mutate(combine, solid = ifelse(mid_point < 26.6, "dashed", "solid"))
+
+library(ggplot2)
+library(formattable)
+f1 <- "Times"
+
+VEPlot <- ggplot() + 
+  geom_line(data = combine, mapping = aes(x = mid_point, y = pfi_inf, color = "infection", linetype = solid), size = 1.5) +
+  geom_line(data = combine, mapping = aes(x = mid_point, y = pfizer_sym, color = "symptomatic", linetype = solid), size = 1.5) +
+  geom_line(data = combine, mapping = aes(x = mid_point, y = pfizer_hosp, color = "hosp", linetype = solid), size = 1.5) +
+  geom_line(data = combine, mapping = aes(x = mid_point, y = pfizer_dea, color = "death", linetype = solid), size = 1.5) +
+  geom_point(data = infec, mapping = aes(x = mid_point, y = efficacy_mean, color = vaccine_developer, size = insesqua)) +
+  ylim(c(0, 1))+
+  xlim(c(0, 52)) +
+  theme_classic() +
+  theme(text=element_text(size=26, family = f1),
+        legend.position = "bottom") +
+  #panel.grid = element_blank()) 
+  #panel.border = element_blank())
+  guides(linetype = FALSE) +
+  #theme(axis.title = element_text(size = 40)) +
+  labs(y="Vaccine effectiveness", x = "Week after second dose", colour = "Outcomes") +
+  #theme_light() +
+  #theme_classic() +
+  geom_hline(aes(yintercept = c(0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1), linetype = "yellow"))+
+  guides(size = FALSE)
+
+print(VEPlot)

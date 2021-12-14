@@ -1,0 +1,22 @@
+file:///C:/Carol/HMS520-Autumn2021/Final-Project-Proposal.html
+
+Final Project Proposal
+Caroline Stein
+11/30/2021
+R Markdown
+Final Project Proposal
+
+Your team members: Caroline Stein and Hasan Nassereldine
+
+The format you choose: Refactoring a piece of existing code
+
+The overall goal of the project: Implement improvements in an existing code, for readability or extendability, using data wrangling and modeling tools in R.
+
+The objective of this proposal is to share an overview information regarding the plan to implement the improvements in the code.
+
+This script is supposed to be running considering a set of variables related to the vaccine effectiveness of Pfizer preventing infection, symptomatic and severe disease since weeks after the second dose. The dataset is continually updated, as new data becomes available. So, the objective is to have a code ready to run the analysis considering the intervention, different outcomes, and the period after the second dose of the vaccine as the main covariate.
+
+The code needs to be improved regarding some variable names, a loop for the analysis considering vaccine, outcomes, and time since vaccination.
+
+Detailed plans and timeline:
+12/01: Meeting to talk about the existing code; Bullet points of suggestions to be implemented; 12/03: Implement new commands and run the analysis; 12/07: Implement new commands and run the analysis; 12/09: Prepare the final presentation material.
